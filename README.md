@@ -1,5 +1,18 @@
 # uav_motion
 
+This repository is forked from [ZhiangChen/uav_motion](https://github.com/ZhiangChen/uav_motion). The tracking controller and trajectory generation might be modified in the future.
+
+## Update Record
+
+- 12/12/2024
+
+  - Add file output in geometric controller object to record TargetPose and MavPos.
+  - Test the time allocation part in [trajectory generation](./src/trajectory_generator.cpp). About to revise to our version.
+
+## Original Readme
+
+**The original readme information shows below, including the depending repositories and installing guidance.**
+
 This repository generates a minimum-snap polynomial trajectory and controls a quadrotor with PX4 framework. It depends on [ethz-asl/mav_trajectory_generation](https://github.com/ethz-asl/mav_trajectory_generation) and [Jaeyoung-Lim
 /mavros_controllers](https://github.com/Jaeyoung-Lim/mavros_controllers).
 
