@@ -163,8 +163,6 @@ void TrajectorySamplerNode::commandTimerCallback(const ros::TimerEvent&)
 
 		flatreferencePub_.publish(traj_msg);
 		yawreferencePub_.publish(yaw_msg);
-
-
 	}
 	else
 	{

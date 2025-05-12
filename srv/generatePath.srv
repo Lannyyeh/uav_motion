@@ -1,0 +1,4 @@
+geometry_msgs/Point[] positions
+float32[] yaws
+---
+bool success

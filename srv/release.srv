@@ -1,0 +1,5 @@
+# Release.srv
+
+bool request
+---
+bool success

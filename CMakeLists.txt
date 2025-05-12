@@ -7,7 +7,18 @@ project(uav_motion)
 ## Find catkin macros and libraries
 ## if COMPONENTS list like find_package(catkin REQUIRED COMPONENTS xyz)
 ## is used, also find other catkin packages
-find_package(catkin_simple REQUIRED)
+find_package(catkin_simple REQUIRED
+        mavros_msgs
+        std_msgs
+        message_generation
+)
+find_package(catkin REQUIRED COMPONENTS message_generation std_msgs)
+
+add_service_files(
+        FILES
+        release.srv
+        generatePath.srv
+)
 
 catkin_simple(ALL_DEPS_REQUIRED)
 
@@ -25,6 +36,22 @@ cs_add_executable(trajectory_sampler
 cs_add_executable(geometric_controller
         src/geometric_controller.cpp
 )
+
+catkin_install_python(PROGRAMS
+  scripts/waypoint_generator_test.py
+  DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
+)
+
+catkin_install_python(PROGRAMS
+  scripts/waypoint_generator2.py
+  DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
+)
+
+catkin_install_python(PROGRAMS
+  scripts/simple_waypoint_generator.py
+  DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
+)
+
 ##########
 # EXPORT #
 ##########

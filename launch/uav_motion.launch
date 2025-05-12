@@ -13,7 +13,7 @@
 	<!--arg name="normalizedthrust_constant" default="0.05" />
 	<arg name="normalizedthrust_offset" default="0.1" /-->
 	<!-- heavy iris 2.5kg -->
-	<arg name="normalizedthrust_constant" default="0.08" />
+	<arg name="normalizedthrust_constant" default="0.02" />
 	<arg name="normalizedthrust_offset" default="0.0" />
 
 	<!-- trajectory_sampler -->
