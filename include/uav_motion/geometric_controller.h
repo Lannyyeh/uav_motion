@@ -16,6 +16,7 @@
 #include <Eigen/Dense>
 #include <std_msgs/Float32.h>
 #include <std_msgs/Float64.h>
+#include <std_msgs/Bool.h>
 #include <geometry_msgs/PoseStamped.h>
 #include <geometry_msgs/Twist.h>
 #include <geometry_msgs/TwistStamped.h>
@@ -38,6 +39,8 @@
 #include <trajectory_msgs/MultiDOFJointTrajectory.h>
 #include <dynamic_reconfigure/server.h>
 #include <geometric_controller/GeometricControllerConfig.h>
+
+#include "uav_motion/disturbance_estimator.hpp"
 
 #define ERROR_QUATERNION 1
 #define ERROR_GEOMETRIC 2
@@ -67,7 +70,7 @@ private:
   ros::Subscriber referenceSub_;
   ros::Subscriber flatreferenceSub_;
   ros::Subscriber multiDOFJointSub_;
-
+  
   ros::Subscriber mavimuSub_;
   ros::Subscriber mavstateSub_;
   ros::Subscriber mavposeSub_, gzmavposeSub_;
@@ -75,6 +78,8 @@ private:
   ros::Subscriber yawreferenceSub_;
   ros::Subscriber mavThrustSub_;
 
+  ros::Subscriber waypointsStatusSub_;  
+  
   ros::Publisher rotorVelPub_, angularVelPub_, target_pose_pub_;
   ros::Publisher referencePosePub_;
   ros::Publisher posehistoryPub_;
@@ -112,7 +117,7 @@ private:
   mavros_msgs::CommandBool arm_cmd_;
   std::vector<geometry_msgs::PoseStamped> posehistory_vector_;
   MAV_STATE companion_state_ = MAV_STATE::MAV_STATE_ACTIVE;
-  bool control_available_; // offboard && armed && not killed
+  bool control_available_;  // offboard && armed && not killed
 
   Eigen::Vector3d targetPos_, targetVel_, targetAcc_, targetJerk_, targetSnap_, targetPos_prev_, targetVel_prev_;
   Eigen::Vector3d mavPos_, mavVel_, mavAcc_, mavRate_;
@@ -138,6 +143,12 @@ private:
   Eigen::Vector3d term1, term2;
   double thrust_adaptive;
 
+  // for external force estimator
+  int estimator_enable;
+  DisturbEstimator force_ext_estimator;
+  Eigen::Vector3d K_f;
+  Eigen::Vector3d force_ext;
+
   // for releasing process
   int mission_, test_mode;
   bool call_for_release;
@@ -145,6 +156,11 @@ private:
   double vehicle_idle_thrust, vehicle_release_thrust, vehicle_release_rate_z;
   Eigen::Vector4d cmdReleasingRate_; //{wx, wy, wz, Thrust}
   Eigen::Vector3d droppingPos_;
+
+  // for docking
+  bool ready_to_dock_;
+  Eigen::Vector3d dockingPos_;
+  double docking_final_altitude;
 
   // some constrains
   double max_rate_yaw;
@@ -165,16 +181,16 @@ private:
   void pubJointAngle();
 
   void appendPoseHistory();
-
+  
   void odomCallback(const nav_msgs::OdometryConstPtr &odomMsg);
   void targetCallback(const geometry_msgs::TwistStamped &msg);
   void flattargetCallback(const controller_msgs::FlatTarget &msg);
   void yawtargetCallback(const std_msgs::Float32 &msg);
   void multiDOFJointCallback(const trajectory_msgs::MultiDOFJointTrajectory &msg);
-
+  
   void keyboardCallback(const geometry_msgs::Twist &msg);
   void cmdloopCallback(const ros::TimerEvent &event);
-
+  
   void mavimuCallback(const sensor_msgs::Imu &msg);
   void mavstateCallback(const mavros_msgs::State::ConstPtr &msg);
   void mavposeCallback(const geometry_msgs::PoseStamped &msg);
@@ -182,18 +198,21 @@ private:
   void mavThrustCallback(const mavros_msgs::ThrustSPFromPX4 &msg);
 
   bool releaseCallback(uav_motion::release::Request &req, uav_motion::release::Response &res);
+  void waypointsStatusCallback(const std_msgs::Bool &msg);
+  void checkDockingPos();
 
   void statusloopCallback(const ros::TimerEvent &event);
   bool ctrltriggerCallback(std_srvs::SetBool::Request &req, std_srvs::SetBool::Response &res);
   bool landCallback(std_srvs::SetBool::Request &request, std_srvs::SetBool::Response &response);
   Eigen::Matrix3d quat2RotMatrix(const Eigen::Vector4d q);
   geometry_msgs::PoseStamped vector3d2PoseStampedMsg(Eigen::Vector3d &position, Eigen::Vector4d &orientation);
-
+  
   void computeBodyRateCmd(Eigen::Vector4d &bodyrate_cmd);
   void computeThrustCmd_asmc();
   Eigen::Vector4d quatMultiplication(const Eigen::Vector4d &q, const Eigen::Vector4d &p);
   Eigen::Vector4d attcontroller(const Eigen::Vector4d &ref_att, const Eigen::Vector3d &ref_acc, Eigen::Vector4d &curr_att);
   Eigen::Vector4d geometric_attcontroller(const Eigen::Vector4d &ref_att, const Eigen::Vector3d &ref_acc, Eigen::Vector4d &curr_att);
+
 
   inline Eigen::Vector3d toEigen(const geometry_msgs::Point &p)
   {
@@ -215,6 +234,7 @@ private:
     REALEASING,
     INTERMEDIATE_STATE,
     MISSION_EXECUTION,
+    DOCKING,
     LANDING,
     LANDED
   } node_state;
@@ -232,6 +252,7 @@ private:
   };
   geometry_msgs::Pose home_pose_;
   bool received_home_pose;
+
 
 public:
   void dynamicReconfigureCallback(geometric_controller::GeometricControllerConfig &config, uint32_t level);

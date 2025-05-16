@@ -125,7 +125,12 @@ void TrajectoryGenerator<_N>::waypointsCallback(const uav_motion::waypointsGoalC
 	}
 
 	std::vector<double> segment_times;
-	segment_times = estimateSegmentTimes(vertices, max_v_, max_a_);
+	// segment_times = estimateSegmentTimes(vertices, max_v_, max_a_);
+	segment_times = goal->durations;
+	std::cout << "Segment times:" << std::endl;
+	for (size_t i = 0; i < segment_times.size(); ++i) {
+    	std::cout << "  Segment " << i << ": " << segment_times[i] << " s" << std::endl;
+	}
 	mav_trajectory_generation::Segment::Vector segments;
 	mav_trajectory_generation::Trajectory trajectory;
 

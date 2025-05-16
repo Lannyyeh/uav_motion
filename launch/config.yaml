@@ -12,7 +12,7 @@ uav:
 
 controller:
  position_p: { x: 8, y: 8, z: 6 }
- position_Kp1: { x: 5, y: 5, z: 3 }
+ position_Kp1: { x: 4, y: 4, z: 4 }
  position_Kp2: { x: 0.01, y: 0.01, z: 0.02 }
  gamma_1: 0.015
  position_sigma: 0.02
@@ -21,6 +21,10 @@ controller:
  attitude_Kphi2: { x: 0.001, y: 0.001, z: 0.001 }
  gamma_bb: { x: 0.0001, y: 0.0001, z: 0.0001 }
  attitude_sigma: 0.05
+
+estimator:
+ K_f: {x: 2.5, y: 2.5, z: 3}
+ estimator_enable: 1
 
 constrain:
  tilt_max_angle: 30
@@ -31,8 +35,12 @@ release:
  release_rate_z: 0.2
  max_rate_yaw: 1.0
 
+docking:
+  position: {x: -0.03, y: -0.61, z: 0.8}
+  docking_final_altitude: 1.07
+
 morph:
  max_angle: 140
  min_angle: 140
- morphing_start_time: 10
- morphing_time: 4
+ morphing_start_time: 24
+ morphing_time: 2

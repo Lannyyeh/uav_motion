@@ -1,6 +1,7 @@
 std_msgs/Header header
 geometry_msgs/Point[] positions
 float64[] yaws
+float64[] durations
 ---
 bool success
 ---

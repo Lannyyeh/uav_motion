@@ -33,11 +33,13 @@ geometricCtrl::geometricCtrl(const ros::NodeHandle &nh, const ros::NodeHandle &n
   mavThrustSub_ = nh_.subscribe("/mavros/getThrustSetpoint/thrustSetpoint", 1, &geometricCtrl::mavThrustCallback, this, ros::TransportHints().tcpNoDelay());
   mavimuSub_ = nh_.subscribe("/mavros/imu/data", 1, &geometricCtrl::mavimuCallback, this, ros::TransportHints().tcpNoDelay());
 
-  ctrltriggerServ_ = nh_.advertiseService("tigger_rlcontroller", &geometricCtrl::ctrltriggerCallback, this);
+  waypointsStatusSub_ = nh_.subscribe("/tracking_completed", 1, &geometricCtrl::waypointsStatusCallback, this, ros::TransportHints().tcpNoDelay());
 
+  ctrltriggerServ_ = nh_.advertiseService("tigger_rlcontroller", &geometricCtrl::ctrltriggerCallback, this);
+  
   cmdloop_timer_ = nh_.createTimer(ros::Duration(0.01), &geometricCtrl::cmdloopCallback, this);    // Define timer for constant loop rate
   statusloop_timer_ = nh_.createTimer(ros::Duration(1), &geometricCtrl::statusloopCallback, this); // Define timer for constant loop rate
-
+  
   // const bool oneshot = false;
   // const bool autostart = false;
   // pathloop_timer_ = nh_.createTimer(ros::Duration(0.5), &geometricCtrl::pathloopCallback, this, oneshot, autostart);
@@ -107,7 +109,7 @@ geometricCtrl::geometricCtrl(const ros::NodeHandle &nh, const ros::NodeHandle &n
   nh_.param<double>("/controller/position_Kp2/y", position_Kp2_y, 0.01);
   nh_.param<double>("/controller/position_Kp2/z", position_Kp2_z, 0.02);
   nh_.param<double>("/controller/position_sigma", sigma_1, 0.02);
-
+  
   nh_.param<double>("/controller/gamma_1", gamma_1, 0.02);
   nh_.param<double>("/uav/mass", vehicle_mass, 1.0);
 
@@ -115,6 +117,13 @@ geometricCtrl::geometricCtrl(const ros::NodeHandle &nh, const ros::NodeHandle &n
   nh_.param<double>("/release/release_thrust", vehicle_release_thrust, 0.15);
   nh_.param<double>("/release/release_rate_z", vehicle_release_rate_z, 0.05);
   nh_.param<double>("/release/max_rate_yaw", max_rate_yaw, 0.5);
+
+  double docking_x_, docking_y_, docking_z_;
+  nh_.param<double>("/docking/position/x", docking_x_, 0.0);
+  nh_.param<double>("/docking/position/y", docking_y_, 0.0);
+  nh_.param<double>("/docking/position/z", docking_z_, 0.6);
+  nh_.param<double>("/docking/docking_final_altitude", docking_final_altitude, 1.0);
+  dockingPos_ << docking_x_, docking_y_, docking_z_;
 
   nh_.param<int>("/uav/mission", mission_, 0);
   nh_.param<int>("/uav/test_mode", test_mode, 0);
@@ -124,8 +133,8 @@ geometricCtrl::geometricCtrl(const ros::NodeHandle &nh, const ros::NodeHandle &n
   nh_.param<double>("/morph/morphing_start_time", morphing_start_time, 5);
   nh_.param<double>("/morph/morphing_time", morphing_time, 4);
   joint_angle_ = joint_max_angle;
-  control_step = 0;
-
+  control_step = 0; 
+  
   Kp_1 << position_Kp1_x, position_Kp1_y, position_Kp1_z;
   Kp_2 << position_Kp2_x, position_Kp2_y, position_Kp2_z;
   lambda_1 << position_p_x / position_Kp1_x, position_p_y / position_Kp1_y, position_p_z / position_Kp1_z;
@@ -134,6 +143,15 @@ geometricCtrl::geometricCtrl(const ros::NodeHandle &nh, const ros::NodeHandle &n
   cmdReleasingRate_ << 0.0, 0.0, vehicle_release_rate_z, vehicle_release_thrust;
   cmdIdleRate_ << 0.0, 0.0, 0.0, vehicle_idle_thrust;
 
+  double K_f_x, K_f_y, K_f_z;
+  nh_.param<double>("/estimator/K_f/x", K_f_x, 3.0);
+  nh_.param<double>("/estimator/K_f/y", K_f_y, 3.0);
+  nh_.param<double>("/estimator/K_f/z", K_f_z, 3.0);
+  nh_.param<int>("/estimator/estimator_enable", estimator_enable, 0);
+  K_f << K_f_x, K_f_y, K_f_z;
+
+  force_ext_estimator.initialize(vehicle_mass, K_f);
+  
   outFile.open("/home/ubuntu/uav_motion_ws/record/record.csv");
   outFileParamCheck.open("/home/ubuntu/uav_motion_ws/record/ParamCheck.csv");
   outFileInnerCheck.open("/home/ubuntu/uav_motion_ws/record/InnerCheck.csv");
@@ -262,13 +280,19 @@ void geometricCtrl::mavtwistCallback(const geometry_msgs::TwistStamped &msg)
 void geometricCtrl::mavimuCallback(const sensor_msgs::Imu &msg)
 {
   mavAcc_ = toEigen(msg.linear_acceleration);
-  if (mavAcc_(2) < 5)
-    dropping_detected = true;
+  if (mavAcc_(2) < 5) dropping_detected = true;
 }
 
 void geometricCtrl::mavThrustCallback(const mavros_msgs::ThrustSPFromPX4 &msg)
 {
   thrustFromPX4 = msg.xyz[2];
+}
+
+void geometricCtrl::waypointsStatusCallback(const std_msgs::Bool &msg)
+{
+  if (msg.data) 
+    ready_to_dock_ = true;
+    ROS_INFO("waypoints publishing finished");
 }
 
 bool geometricCtrl::landCallback(std_srvs::SetBool::Request &request, std_srvs::SetBool::Response &response)
@@ -278,13 +302,13 @@ bool geometricCtrl::landCallback(std_srvs::SetBool::Request &request, std_srvs::
 
 bool geometricCtrl::releaseCallback(uav_motion::release::Request &req, uav_motion::release::Response &res)
 {
-  if (req.request)
+  if (req.request) 
   {
     ROS_INFO("got release call");
     call_for_release = true;
     res.success = true;
-  }
-  else
+  } 
+  else 
   {
     res.success = false;
   }
@@ -295,85 +319,92 @@ void geometricCtrl::cmdloopCallback(const ros::TimerEvent &event)
 {
   switch (node_state)
   {
-  case WAITING_FOR_HOME_POSE:
-    waitForPredicate(&received_home_pose, "Waiting for home pose...");
-    ROS_INFO("Got pose! Drone Ready to be armed.");
-    targetPos_ = mavPos_;
-    node_state = WAITING_FOR_OFFBOARD_TRIGGER;
-    break;
+    case WAITING_FOR_HOME_POSE:
+      waitForPredicate(&received_home_pose, "Waiting for home pose...");
+      ROS_INFO("Got pose! Drone Ready to be armed.");
+      targetPos_ = mavPos_;
+      node_state = WAITING_FOR_OFFBOARD_TRIGGER;
+      break;
 
-  case WAITING_FOR_OFFBOARD_TRIGGER:
-    pubRateCommands(cmdIdleRate_);
-    if (control_available_)
-    {
-      if (mission_)
-        node_state = WAITING_TO_RELEASE;
-      else
+    case WAITING_FOR_OFFBOARD_TRIGGER:
+      pubRateCommands(cmdIdleRate_);
+      if (control_available_)
       {
+        if (mission_) node_state = WAITING_TO_RELEASE;
+        else 
+        {
+          node_state = MISSION_EXECUTION;
+        }
+      }
+        break;
+
+    case WAITING_TO_RELEASE:
+      pubRateCommands(cmdIdleRate_);
+      ROS_INFO("Waiting for release call");
+      if (call_for_release)
+      {
+        ROS_INFO("Go to releasing process");
+        node_state = REALEASING;
+      }
+      break; 
+
+    case REALEASING:
+      ROS_INFO("Now releasing");
+      pubRateCommands(cmdReleasingRate_);
+      if (dropping_detected){
+        ROS_INFO("Dropping detected");
+        droppingPos_ = mavPos_;
+        targetPos_ << mavPos_(0), mavPos_(1), mavPos_(2) - 0.1;
         node_state = MISSION_EXECUTION;
       }
-    }
-    break;
+      break;
 
-  case WAITING_TO_RELEASE:
-    pubRateCommands(cmdIdleRate_);
-    ROS_INFO("Waiting for release call");
-    if (call_for_release)
+    case INTERMEDIATE_STATE:
+      pubRateCommands(cmdReleasingRate_);
+      ROS_INFO("Dropping position: %.2f, %.2f, %.2f", droppingPos_(0), droppingPos_(1), droppingPos_(2));
+      ROS_INFO("Tracking position: %.2f, %.2f, %.2f", targetPos_(0), targetPos_(1), targetPos_(2));
+      break;
+
+    case MISSION_EXECUTION:
+      // if (!feedthrough_enable_)
+      //   computeBodyRateCmd(cmdBodyRate_);
+      computeThrustCmd_asmc();
+      pubReferencePose(targetPos_, q_des);
+      if (test_mode) pubRateCommands(cmdIdleRate_);
+      else pubRateCommands(cmdBodyRate_);
+      pubJointAngle();
+      appendPoseHistory();
+      pubPoseHistory();
+      if (ready_to_dock_) 
+      {
+        node_state = DOCKING;
+        ROS_INFO("switch to docking");
+      }
+      break;
+    case DOCKING:
+      computeThrustCmd_asmc();
+      pubReferencePose(targetPos_, q_des);
+      if (test_mode) pubRateCommands(cmdIdleRate_);
+      else pubRateCommands(cmdBodyRate_);
+      checkDockingPos();
+      break;
+      // how to end docking ?
+    case LANDING:
     {
-      ROS_INFO("Go to releasing process");
-      node_state = REALEASING;
+      geometry_msgs::PoseStamped landingmsg;
+      landingmsg.header.stamp = ros::Time::now();
+      landingmsg.pose = home_pose_;
+      landingmsg.pose.position.z = landingmsg.pose.position.z + 1.0;
+      target_pose_pub_.publish(landingmsg);
+      node_state = LANDED;
+      ros::spinOnce();
+      break;
     }
-    break;
 
-  case REALEASING:
-    ROS_INFO("Now releasing");
-    pubRateCommands(cmdReleasingRate_);
-    if (dropping_detected)
-    {
-      ROS_INFO("Dropping detected");
-      droppingPos_ = mavPos_;
-      targetPos_ << mavPos_(0), mavPos_(1), mavPos_(2) - 0.1;
-      node_state = MISSION_EXECUTION;
-    }
-    break;
-
-  case INTERMEDIATE_STATE:
-    pubRateCommands(cmdReleasingRate_);
-    ROS_INFO("Dropping position: %.2f, %.2f, %.2f", droppingPos_(0), droppingPos_(1), droppingPos_(2));
-    ROS_INFO("Tracking position: %.2f, %.2f, %.2f", targetPos_(0), targetPos_(1), targetPos_(2));
-    break;
-
-  case MISSION_EXECUTION:
-    // if (!feedthrough_enable_)
-    //   computeBodyRateCmd(cmdBodyRate_);
-    computeThrustCmd_asmc();
-    pubReferencePose(targetPos_, q_des);
-    if (test_mode)
-      pubRateCommands(cmdIdleRate_);
-    else
-      pubRateCommands(cmdBodyRate_);
-
-    pubJointAngle();
-    appendPoseHistory();
-    pubPoseHistory();
-    break;
-
-  case LANDING:
-  {
-    geometry_msgs::PoseStamped landingmsg;
-    landingmsg.header.stamp = ros::Time::now();
-    landingmsg.pose = home_pose_;
-    landingmsg.pose.position.z = landingmsg.pose.position.z + 1.0;
-    target_pose_pub_.publish(landingmsg);
-    node_state = LANDED;
-    ros::spinOnce();
-    break;
-  }
-
-  case LANDED:
-    ROS_INFO("Landed. Please set to position control and disarm.");
-    cmdloop_timer_.stop();
-    break;
+    case LANDED:
+      ROS_INFO("Landed. Please set to position control and disarm.");
+      cmdloop_timer_.stop();
+      break;
   }
   if (control_available_)
   {
@@ -382,7 +413,7 @@ void geometricCtrl::cmdloopCallback(const ros::TimerEvent &event)
     outFileParamCheck << "lambda1" << "," << lambda_1(0) << "," << lambda_1(1) << "," << lambda_1(2) << ",\n";
     outFileParamCheck << "Kpos_" << "," << Kpos_(0) << "," << Kpos_(1) << "," << Kpos_(2) << ",\n";
     outFileParamCheck << "Kvel_" << "," << Kvel_(0) << "," << Kvel_(1) << "," << Kvel_(2) << ",\n";
-
+    
     outFile << "setpoint" << "," << targetPos_(0) << "," << targetPos_(1) << "," << targetPos_(2) << "," << "\n";
     outFile << "currentPose" << "," << mavPos_(0) << "," << mavPos_(1) << "," << mavPos_(2) << "," << "\n";
     outFile << "targetVel" << "," << targetVel_(0) << "," << targetVel_(1) << "," << targetVel_(2) << "," << "\n";
@@ -394,6 +425,7 @@ void geometricCtrl::cmdloopCallback(const ros::TimerEvent &event)
     outFile << "acc_des_asmc" << "," << acc_des_asmc(0) << "," << acc_des_asmc(1) << "," << acc_des_asmc(2) << "," << "\n";
     outFile << "acc_fb_asmc" << "," << acc_fb_asmc(0) << "," << acc_fb_asmc(1) << "," << acc_fb_asmc(2) << "," << "\n";
     outFile << "mass" << "," << vehicle_mass << "," << mass_hat << "," << thrust_adaptive << "," << "\n";
+    outFile << "force_ext" << "," << force_ext(0) << "," << force_ext(1) << "," << force_ext(2) << "," << "\n";
 
     outFileInnerCheck << "term1" << "," << term1(0) << "," << term1(1) << "," << term1(2) << "," << "\n";
     outFileInnerCheck << "term2" << "," << term2(0) << "," << term2(1) << "," << term2(2) << "," << "\n";
@@ -406,13 +438,12 @@ void geometricCtrl::cmdloopCallback(const ros::TimerEvent &event)
 void geometricCtrl::mavstateCallback(const mavros_msgs::State::ConstPtr &msg)
 {
   current_state_ = *msg;
-  if (current_state_.mode == "OFFBOARD" && current_state_.armed && current_state_.system_status != 8)
+  if (current_state_.mode == "OFFBOARD" && current_state_.armed && current_state_.system_status !=8)
   {
     // offboard && armed && not killed
     control_available_ = true;
   }
-  else
-    control_available_ = false;
+  else control_available_ = false;
 }
 
 void geometricCtrl::statusloopCallback(const ros::TimerEvent &event)
@@ -488,7 +519,7 @@ void geometricCtrl::pubJointAngle()
     joint_angle_ = joint_max_angle - (joint_max_angle - joint_min_angle) * (control_step - morphing_start_step) / morphing_step;
   }
   std_msgs::Float64 joint_angle;
-  joint_angle.data = joint_angle_;
+	joint_angle.data = joint_angle_;
   jointAnglePub_.publish(joint_angle);
   // ROS_INFO("joint angle: %lf", joint_angle_);
 }
@@ -588,12 +619,13 @@ void geometricCtrl::computeThrustCmd_asmc()
     delta_1 = s_1 - sigma_1 * sat(s_1 / sigma_1);
 
   Eigen::Matrix<double, 3, 1> p_r_diff2 = targetAcc_ - lambda_1.asDiagonal() * e_1_diff;
+  
   // Calculate desired force
   // the gravity direction is opposite to that in our paper
   Eigen::Vector3d force_tmp;
-  force_tmp = vehicle_mass * (-g_ + p_r_diff2) - Kp_1.asDiagonal() * delta_1;
+  force_tmp = vehicle_mass * (-g_ + p_r_diff2)- Kp_1.asDiagonal() * delta_1 - force_ext; 
   if (sigma_1 != 0)
-    force_tmp = vehicle_mass * (-g_ + p_r_diff2) - Kp_1.asDiagonal() * delta_1 - Kp_2.asDiagonal() * sat(s_1 / sigma_1);
+    force_tmp = vehicle_mass * (-g_ + p_r_diff2) - Kp_1.asDiagonal() * delta_1 - Kp_2.asDiagonal() * sat(s_1 / sigma_1) - force_ext;
 
   acc_des_asmc = force_tmp / vehicle_mass;
   acc_fb_asmc = acc_des_asmc - targetAcc_ - (-g_);
@@ -618,12 +650,33 @@ void geometricCtrl::computeThrustCmd_asmc()
 
   if (control_available_)
   {
+    // update mass after control available
     double dt = 0.01;
-    mass_diff = -gamma_1 * delta_1.transpose() * (-g_ + p_r_diff2);
+    mass_diff = - gamma_1 * delta_1.transpose() * (-g_ + p_r_diff2);
     mass_diff = mass_diff * dt;
     mass_hat = mass_hat + mass_diff;
     term1 = delta_1;
     term2 = -g_ + p_r_diff2;
+
+    // update external force estimation
+    if (estimator_enable)
+    {
+      double time_now = ros::Time::now().toSec();
+      Eigen::Vector3d force_actual = acc_des_asmc * mass_hat;
+      force_ext_estimator.setBodyMass(mass_hat);
+      force_ext_estimator.setControlForce(force_actual);
+      force_ext_estimator.update_force(mavVel_, time_now);
+    }
+    force_ext = force_ext_estimator.getForceEstimate();
+  }
+}
+
+void geometricCtrl::checkDockingPos()
+{
+  if ((mavPos_.head(2) - dockingPos_.head(2)).cwiseAbs().maxCoeff() < 0.02)
+  {
+    if (targetPos_(2) < docking_final_altitude)
+      targetPos_(2) = targetPos_(2) + 0.005;  
   }
 }
 
@@ -753,16 +806,14 @@ Eigen::Vector4d geometricCtrl::geometric_attcontroller(const Eigen::Vector4d &re
   error_att = 0.5 * matrix_hat_inv(rotmat_d.transpose() * rotmat - rotmat.transpose() * rotmat);
   ratecmd.head(3) = (2.0 / attctrl_tau_) * error_att;
 
-  if (ratecmd(2) > max_rate_yaw)
-    ratecmd(2) = max_rate_yaw;
-  else if (ratecmd(2) < -max_rate_yaw)
-    ratecmd(2) = -max_rate_yaw;
-
+  if (ratecmd(2) > max_rate_yaw) ratecmd(2) = max_rate_yaw;
+  else if (ratecmd(2) < - max_rate_yaw) ratecmd(2) = - max_rate_yaw;
+  
   rotmat = quat2RotMatrix(mavAtt_);
   zb = rotmat.col(2);
 
   ratecmd(3) = std::max(0.0, std::min(1.0, norm_thrust_const_ * ref_acc.dot(zb) + norm_thrust_offset_)); // Calculate thrust
-  double scaling_factor = mass_hat / vehicle_mass;
+  double scaling_factor = mass_hat / vehicle_mass; 
   ratecmd(3) = ratecmd(3) * scaling_factor;
 
   return ratecmd;
