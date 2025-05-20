@@ -51,6 +51,7 @@ geometricCtrl::geometricCtrl(const ros::NodeHandle &nh, const ros::NodeHandle &n
   systemstatusPub_ = nh_.advertise<mavros_msgs::CompanionProcessStatus>("/mavros/companion_process/status", 1);
 
   jointAnglePub_ = nh_.advertise<std_msgs::Float64>("/dynamixel_goal_position", 10);
+  flightStatePub_ = nh_.advertise<std_msgs::UInt8>("/flight_state", 10);
 
   arming_client_ = nh_.serviceClient<mavros_msgs::CommandBool>("/mavros/cmd/arming");
   set_mode_client_ = nh_.serviceClient<mavros_msgs::SetMode>("/mavros/set_mode");
@@ -280,7 +281,7 @@ void geometricCtrl::mavtwistCallback(const geometry_msgs::TwistStamped &msg)
 void geometricCtrl::mavimuCallback(const sensor_msgs::Imu &msg)
 {
   mavAcc_ = toEigen(msg.linear_acceleration);
-  if (mavAcc_(2) < 5) dropping_detected = true;
+  if (mavAcc_(2) < 7.5 && mavPos_(2) < (docking_final_altitude - 0.02)) dropping_detected = true;
 }
 
 void geometricCtrl::mavThrustCallback(const mavros_msgs::ThrustSPFromPX4 &msg)
@@ -330,23 +331,23 @@ void geometricCtrl::cmdloopCallback(const ros::TimerEvent &event)
       pubRateCommands(cmdIdleRate_);
       if (control_available_)
       {
-        if (mission_) node_state = WAITING_TO_RELEASE;
+        if (mission_) node_state = REALEASING;
         else 
         {
-          node_state = MISSION_EXECUTION;
+          node_state = TRACKING;
         }
       }
         break;
 
-    case WAITING_TO_RELEASE:
-      pubRateCommands(cmdIdleRate_);
-      ROS_INFO("Waiting for release call");
-      if (call_for_release)
-      {
-        ROS_INFO("Go to releasing process");
-        node_state = REALEASING;
-      }
-      break; 
+    // case WAITING_TO_RELEASE:
+    //   pubRateCommands(cmdIdleRate_);
+    //   ROS_INFO("Waiting for release call");
+    //   if (call_for_release)
+    //   {
+    //     ROS_INFO("Go to releasing process");
+    //     node_state = REALEASING;
+    //   }
+    //   break; 
 
     case REALEASING:
       ROS_INFO("Now releasing");
@@ -355,17 +356,11 @@ void geometricCtrl::cmdloopCallback(const ros::TimerEvent &event)
         ROS_INFO("Dropping detected");
         droppingPos_ = mavPos_;
         targetPos_ << mavPos_(0), mavPos_(1), mavPos_(2) - 0.1;
-        node_state = MISSION_EXECUTION;
+        node_state = TRACKING;
       }
       break;
 
-    case INTERMEDIATE_STATE:
-      pubRateCommands(cmdReleasingRate_);
-      ROS_INFO("Dropping position: %.2f, %.2f, %.2f", droppingPos_(0), droppingPos_(1), droppingPos_(2));
-      ROS_INFO("Tracking position: %.2f, %.2f, %.2f", targetPos_(0), targetPos_(1), targetPos_(2));
-      break;
-
-    case MISSION_EXECUTION:
+    case TRACKING:
       // if (!feedthrough_enable_)
       //   computeBodyRateCmd(cmdBodyRate_);
       computeThrustCmd_asmc();
@@ -406,6 +401,7 @@ void geometricCtrl::cmdloopCallback(const ros::TimerEvent &event)
       cmdloop_timer_.stop();
       break;
   }
+  pubFlightState();
   if (control_available_)
   {
     outFileParamCheck << "Kp1" << "," << Kp_1(0) << "," << Kp_1(1) << "," << Kp_1(2) << ",\n";
@@ -431,7 +427,8 @@ void geometricCtrl::cmdloopCallback(const ros::TimerEvent &event)
     outFileInnerCheck << "term2" << "," << term2(0) << "," << term2(1) << "," << term2(2) << "," << "\n";
     outFileInnerCheck << "mass_diff" << "," << mass_diff << "," << "\n";
 
-    control_step = control_step + 1;
+    if (node_state == TRACKING)
+      control_step = control_step + 1;
   }
 }
 
@@ -522,6 +519,13 @@ void geometricCtrl::pubJointAngle()
 	joint_angle.data = joint_angle_;
   jointAnglePub_.publish(joint_angle);
   // ROS_INFO("joint angle: %lf", joint_angle_);
+}
+
+void geometricCtrl::pubFlightState()
+{
+  std_msgs::UInt8 msg;
+  msg.data = static_cast<uint8_t>(node_state);
+  flightStatePub_.publish(msg);
 }
 
 void geometricCtrl::pubPoseHistory()
@@ -648,9 +652,9 @@ void geometricCtrl::computeThrustCmd_asmc()
     cmdBodyRate_ = attcontroller(q_des, acc_des_asmc, mavAtt_); // Calculate BodyRate
   }
 
-  if (control_available_)
+  if (node_state == TRACKING || node_state == DOCKING)
   {
-    // update mass after control available
+    // update mass after state available
     double dt = 0.01;
     mass_diff = - gamma_1 * delta_1.transpose() * (-g_ + p_r_diff2);
     mass_diff = mass_diff * dt;
@@ -676,7 +680,7 @@ void geometricCtrl::checkDockingPos()
   if ((mavPos_.head(2) - dockingPos_.head(2)).cwiseAbs().maxCoeff() < 0.02)
   {
     if (targetPos_(2) < docking_final_altitude)
-      targetPos_(2) = targetPos_(2) + 0.005;  
+      targetPos_(2) = targetPos_(2) + 0.001;  
   }
 }
 

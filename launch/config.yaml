@@ -7,7 +7,7 @@ uav:
  min_rotor_speed: 50
  rotor_constant: 5.84e-06
  rotor_moment_constant: 0.06
- mission: 0
+ mission: 1
  test_mode: 0
 
 controller:
@@ -36,11 +36,11 @@ release:
  max_rate_yaw: 1.0
 
 docking:
-  position: {x: -0.03, y: -0.61, z: 0.8}
-  docking_final_altitude: 1.07
+  position: {x: -0.12, y: -0.55, z: 0.8}
+  docking_final_altitude: 1.05
 
 morph:
  max_angle: 140
- min_angle: 140
- morphing_start_time: 24
+ min_angle: 100
+ morphing_start_time: 20
  morphing_time: 2

@@ -7,6 +7,7 @@ import numpy as np
 from std_srvs.srv import Empty
 from mavros_msgs.msg import State
 from std_msgs.msg import Bool
+from std_msgs.msg import UInt8
 
 # 全局变量
 waypoints = []
@@ -58,11 +59,11 @@ def read_waypoints_from_file(filename):
             data.append(values)
     return data
 
-def state_callback(msg):
+def flight_state_callback(msg):
     global timers_started
 
-    if msg.mode == "OFFBOARD" and not timers_started:
-        rospy.loginfo("OFFBOARD mode detected. Starting waypoint timers.")
+    if msg.data == 3 and not timers_started:
+        rospy.loginfo("TRACKING mode detected. Starting waypoint timers.")
         timers_started = True
         start_waypoint_timers()
 
@@ -96,6 +97,7 @@ if __name__ == '__main__':
         exit(1)
 
     # 订阅 MAVROS 状态
-    rospy.Subscriber("/mavros/state", State, state_callback)
+    # rospy.Subscriber("/mavros/state", State, state_callback)
+    rospy.Subscriber('/flight_state', UInt8, flight_state_callback)
 
     rospy.spin()

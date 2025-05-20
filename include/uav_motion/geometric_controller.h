@@ -16,6 +16,7 @@
 #include <Eigen/Dense>
 #include <std_msgs/Float32.h>
 #include <std_msgs/Float64.h>
+#include <std_msgs/UInt8.h>
 #include <std_msgs/Bool.h>
 #include <geometry_msgs/PoseStamped.h>
 #include <geometry_msgs/Twist.h>
@@ -85,6 +86,8 @@ private:
   ros::Publisher posehistoryPub_;
   ros::Publisher systemstatusPub_;
   ros::Publisher jointAnglePub_;
+
+  ros::Publisher flightStatePub_;
 
   ros::ServiceClient arming_client_;
   ros::ServiceClient set_mode_client_;
@@ -177,6 +180,7 @@ private:
   void pubReferencePose(const Eigen::Vector3d &target_position, const Eigen::Vector4d &target_attitude);
   void pubPoseHistory();
   void pubSystemStatus();
+  void pubFlightState();
 
   void pubJointAngle();
 
@@ -230,10 +234,10 @@ private:
   {
     WAITING_FOR_HOME_POSE,
     WAITING_FOR_OFFBOARD_TRIGGER,
-    WAITING_TO_RELEASE,
+    // WAITING_TO_RELEASE,
     REALEASING,
-    INTERMEDIATE_STATE,
-    MISSION_EXECUTION,
+    // INTERMEDIATE_STATE,
+    TRACKING,
     DOCKING,
     LANDING,
     LANDED

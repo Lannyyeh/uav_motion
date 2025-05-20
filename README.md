@@ -6,6 +6,14 @@
 
 ## Update Record
 
+### 2025-05-20
+
+- Procedure
+  - Remove the unused state of 'INTERMEDIATE_STATE' and 'WAITING_TO_RELEASE'.
+  - Add a state publisher. The waypoint generator now send waypoint msgs when the flight state is 'TRACKING', instead of the mavros status 'OFFBOARD'.
+- Dropping judgement
+  - Add position information for aiding.
+
 ### 2025-05-12
 
 - The project reached a baseline.
