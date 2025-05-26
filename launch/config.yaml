@@ -36,11 +36,13 @@ release:
  max_rate_yaw: 1.0
 
 docking:
-  position: {x: -0.12, y: -0.55, z: 0.8}
-  docking_final_altitude: 1.05
+  position: {x: -0.12, y: -0.54, z: 0.8}
+  docking_final_altitude: 1.03
+  docking_actual_altitude: 0.97
+  force_desired: -2.6
 
 morph:
  max_angle: 140
- min_angle: 100
- morphing_start_time: 20
- morphing_time: 2
+ min_angle: 95
+ morphing_start_time: 19
+ morphing_time: 1

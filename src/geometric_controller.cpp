@@ -32,6 +32,7 @@ geometricCtrl::geometricCtrl(const ros::NodeHandle &nh, const ros::NodeHandle &n
   mavtwistSub_ = nh_.subscribe("/mavros/local_position/velocity_local", 1, &geometricCtrl::mavtwistCallback, this, ros::TransportHints().tcpNoDelay());
   mavThrustSub_ = nh_.subscribe("/mavros/getThrustSetpoint/thrustSetpoint", 1, &geometricCtrl::mavThrustCallback, this, ros::TransportHints().tcpNoDelay());
   mavimuSub_ = nh_.subscribe("/mavros/imu/data", 1, &geometricCtrl::mavimuCallback, this, ros::TransportHints().tcpNoDelay());
+  mavBatterySub_ = nh_.subscribe("/mavros/battery", 1, &geometricCtrl::mavBatteryCallback, this, ros::TransportHints().tcpNoDelay());
 
   waypointsStatusSub_ = nh_.subscribe("/tracking_completed", 1, &geometricCtrl::waypointsStatusCallback, this, ros::TransportHints().tcpNoDelay());
 
@@ -123,8 +124,11 @@ geometricCtrl::geometricCtrl(const ros::NodeHandle &nh, const ros::NodeHandle &n
   nh_.param<double>("/docking/position/x", docking_x_, 0.0);
   nh_.param<double>("/docking/position/y", docking_y_, 0.0);
   nh_.param<double>("/docking/position/z", docking_z_, 0.6);
-  nh_.param<double>("/docking/docking_final_altitude", docking_final_altitude, 1.0);
+  nh_.param<double>("/docking/docking_final_altitude", docking_final_altitude, 1.05);
+  nh_.param<double>("/docking/docking_actual_altitude", docking_actual_altitude, 1.0);
+  nh_.param<double>("/docking/force_desired", force_desired, -2.0);
   dockingPos_ << docking_x_, docking_y_, docking_z_;
+  force_desired_vec << 0.0, 0.0, force_desired;
 
   nh_.param<int>("/uav/mission", mission_, 0);
   nh_.param<int>("/uav/test_mode", test_mode, 0);
@@ -136,6 +140,7 @@ geometricCtrl::geometricCtrl(const ros::NodeHandle &nh, const ros::NodeHandle &n
   joint_angle_ = joint_max_angle;
   control_step = 0; 
   
+  Kp << position_p_x, position_p_y, position_p_z;
   Kp_1 << position_Kp1_x, position_Kp1_y, position_Kp1_z;
   Kp_2 << position_Kp2_x, position_Kp2_y, position_Kp2_z;
   lambda_1 << position_p_x / position_Kp1_x, position_p_y / position_Kp1_y, position_p_z / position_Kp1_z;
@@ -151,7 +156,9 @@ geometricCtrl::geometricCtrl(const ros::NodeHandle &nh, const ros::NodeHandle &n
   nh_.param<int>("/estimator/estimator_enable", estimator_enable, 0);
   K_f << K_f_x, K_f_y, K_f_z;
 
+  // observer & sliding window filter
   force_ext_estimator.initialize(vehicle_mass, K_f);
+  force_ext_filter.set_filter(3, 10);
   
   outFile.open("/home/ubuntu/uav_motion_ws/record/record.csv");
   outFileParamCheck.open("/home/ubuntu/uav_motion_ws/record/ParamCheck.csv");
@@ -281,7 +288,12 @@ void geometricCtrl::mavtwistCallback(const geometry_msgs::TwistStamped &msg)
 void geometricCtrl::mavimuCallback(const sensor_msgs::Imu &msg)
 {
   mavAcc_ = toEigen(msg.linear_acceleration);
-  if (mavAcc_(2) < 7.5 && mavPos_(2) < (docking_final_altitude - 0.02)) dropping_detected = true;
+  if (mavAcc_(2) < 7.0 && mavPos_(2) < (docking_actual_altitude - 0.02)) dropping_detected = true;
+}
+
+void geometricCtrl::mavBatteryCallback(const sensor_msgs::BatteryState &msg)
+{
+  batteryVoltage = double(msg.voltage);
 }
 
 void geometricCtrl::mavThrustCallback(const mavros_msgs::ThrustSPFromPX4 &msg)
@@ -338,16 +350,6 @@ void geometricCtrl::cmdloopCallback(const ros::TimerEvent &event)
         }
       }
         break;
-
-    // case WAITING_TO_RELEASE:
-    //   pubRateCommands(cmdIdleRate_);
-    //   ROS_INFO("Waiting for release call");
-    //   if (call_for_release)
-    //   {
-    //     ROS_INFO("Go to releasing process");
-    //     node_state = REALEASING;
-    //   }
-    //   break; 
 
     case REALEASING:
       ROS_INFO("Now releasing");
@@ -415,17 +417,16 @@ void geometricCtrl::cmdloopCallback(const ros::TimerEvent &event)
     outFile << "targetVel" << "," << targetVel_(0) << "," << targetVel_(1) << "," << targetVel_(2) << "," << "\n";
     outFile << "currentVel" << "," << mavVel_(0) << "," << mavVel_(1) << "," << mavVel_(2) << "," << "\n";
     outFile << "currentAcc" << "," << mavAcc_(0) << "," << mavAcc_(1) << "," << mavAcc_(2) << "," << "\n";
-    outFile << "acc_des" << "," << a_des(0) << "," << a_des(1) << "," << a_des(2) << "," << "\n";
-    outFile << "acc_feedback" << "," << a_fb(0) << "," << a_fb(1) << "," << a_fb(2) << "," << "\n";
     outFile << "cmdActual" << "," << cmdActual_(0) << "," << cmdActual_(1) << "," << cmdActual_(2) << "," << cmdActual_(3) << "," << "\n";
-    outFile << "acc_des_asmc" << "," << acc_des_asmc(0) << "," << acc_des_asmc(1) << "," << acc_des_asmc(2) << "," << "\n";
-    outFile << "acc_fb_asmc" << "," << acc_fb_asmc(0) << "," << acc_fb_asmc(1) << "," << acc_fb_asmc(2) << "," << "\n";
-    outFile << "mass" << "," << vehicle_mass << "," << mass_hat << "," << thrust_adaptive << "," << "\n";
+    outFile << "force_3d" << "," << force_3d(0) << "," << force_3d(1) << "," << force_3d(2) << "," << "\n";
+    outFile << "force_feedback" << "," << force_feedback(0) << "," << force_feedback(1) << "," << force_feedback(2) << "," << "\n";
+    outFile << "else" << "," << int(use_impedance_control) << "," << batteryVoltage << "," << control_step << "," << "\n";
     outFile << "force_ext" << "," << force_ext(0) << "," << force_ext(1) << "," << force_ext(2) << "," << "\n";
+    outFile << "force_ext_filtered" << "," << force_ext_filtered(0) << "," << force_ext_filtered(1) << "," << force_ext_filtered(2) << "," << "\n";
 
-    outFileInnerCheck << "term1" << "," << term1(0) << "," << term1(1) << "," << term1(2) << "," << "\n";
-    outFileInnerCheck << "term2" << "," << term2(0) << "," << term2(1) << "," << term2(2) << "," << "\n";
-    outFileInnerCheck << "mass_diff" << "," << mass_diff << "," << "\n";
+    // outFileInnerCheck << "term1" << "," << term1(0) << "," << term1(1) << "," << term1(2) << "," << "\n";
+    // outFileInnerCheck << "term2" << "," << term2(0) << "," << term2(1) << "," << term2(2) << "," << "\n";
+    // outFileInnerCheck << "mass_diff" << "," << mass_diff << "," << "\n";
 
     if (node_state == TRACKING)
       control_step = control_step + 1;
@@ -627,48 +628,82 @@ void geometricCtrl::computeThrustCmd_asmc()
   // Calculate desired force
   // the gravity direction is opposite to that in our paper
   Eigen::Vector3d force_tmp;
-  force_tmp = vehicle_mass * (-g_ + p_r_diff2)- Kp_1.asDiagonal() * delta_1 - force_ext; 
+  force_tmp = vehicle_mass * (-g_ + p_r_diff2)- Kp_1.asDiagonal() * delta_1; 
   if (sigma_1 != 0)
-    force_tmp = vehicle_mass * (-g_ + p_r_diff2) - Kp_1.asDiagonal() * delta_1 - Kp_2.asDiagonal() * sat(s_1 / sigma_1) - force_ext;
+    force_tmp = vehicle_mass * (-g_ + p_r_diff2) - Kp_1.asDiagonal() * delta_1 - Kp_2.asDiagonal() * sat(s_1 / sigma_1);
 
-  acc_des_asmc = force_tmp / vehicle_mass;
-  acc_fb_asmc = acc_des_asmc - targetAcc_ - (-g_);
+  // mass sometimes ignored since it is just around 1
+  // acc_des_asmc = force_tmp / vehicle_mass;
+  force_feedback = force_tmp - targetAcc_ - (-g_);
 
   // Clip acceleration if the part of feedback is too large
-  if (acc_fb_asmc.norm() > max_fb_acc_)
+  if (force_feedback.norm() > max_fb_acc_)
   {
-    acc_fb_asmc = (max_fb_acc_ / acc_fb_asmc.norm()) * acc_fb_asmc;
+    force_feedback = (max_fb_acc_ / force_feedback.norm()) * force_feedback;
   }
-  acc_des_asmc = acc_fb_asmc + targetAcc_ + (-g_);
-
-  q_des = acc2quaternion(acc_des_asmc, mavYaw_);
-
-  if (ctrl_mode_ == ERROR_GEOMETRIC)
-  {
-    cmdBodyRate_ = geometric_attcontroller(q_des, acc_des_asmc, mavAtt_); // Calculate BodyRate
-  }
+  if (use_impedance_control)
+    force_3d = force_feedback + targetAcc_ + (-g_) - force_desired_vec;
   else
-  {
-    cmdBodyRate_ = attcontroller(q_des, acc_des_asmc, mavAtt_); // Calculate BodyRate
-  }
+    force_3d = force_feedback + targetAcc_ + (-g_) - force_ext;
+
+  q_des = acc2quaternion(force_3d, mavYaw_);
+
+  cmdBodyRate_ = geometric_attcontroller(q_des, force_3d, mavAtt_); // Calculate BodyRate
 
   if (node_state == TRACKING || node_state == DOCKING)
   {
     // update mass after state available
-    double dt = 0.01;
-    mass_diff = - gamma_1 * delta_1.transpose() * (-g_ + p_r_diff2);
-    mass_diff = mass_diff * dt;
-    mass_hat = mass_hat + mass_diff;
-    term1 = delta_1;
-    term2 = -g_ + p_r_diff2;
+    // double dt = 0.01;
+    // mass_diff = - gamma_1 * delta_1.transpose() * (-g_ + p_r_diff2);
+    // mass_diff = mass_diff * dt;
+    // mass_hat = mass_hat + mass_diff;
+    // term1 = delta_1;
+    // term2 = -g_ + p_r_diff2;
 
     // update external force estimation
     if (estimator_enable)
     {
       double time_now = ros::Time::now().toSec();
-      Eigen::Vector3d force_actual = acc_des_asmc * mass_hat;
-      force_ext_estimator.setBodyMass(mass_hat);
-      force_ext_estimator.setControlForce(force_actual);
+      force_ext_estimator.setControlForce(force_3d);
+      force_ext_estimator.update_force(mavVel_, time_now);
+    }
+    force_ext = force_ext_estimator.getForceEstimate();
+    if (node_state == TRACKING)
+    {
+      force_ext_filtered = force_ext_filter.update(force_ext);
+      force_desired_vec << 0, 0, force_ext_filtered(2) + force_desired;
+    }
+  }
+}
+
+void geometricCtrl::computeThrustCmd_normal()
+{
+  const Eigen::Vector3d errPos = mavPos_ - targetPos_;
+  const Eigen::Vector3d errVel = mavVel_ - targetVel_;
+
+  force_feedback = - (Kp.asDiagonal() * errPos + Kp_1.asDiagonal() * errVel);
+  // feedback force clip
+  // note that we directly compare force with acc since mass is just around 1
+  if (force_feedback.norm() > max_fb_acc_)
+  {
+    force_feedback = (max_fb_acc_ / force_feedback.norm()) * force_feedback;
+  }
+  
+  if (use_impedance_control)
+    force_3d = force_feedback - vehicle_mass * g_ + vehicle_mass * targetAcc_ - force_desired_vec;
+  else
+    force_3d = force_feedback - vehicle_mass * g_ + vehicle_mass * targetAcc_ - force_ext;
+
+  q_des = acc2quaternion(force_3d, mavYaw_);
+  cmdBodyRate_ = geometric_attcontroller(q_des, force_3d, mavAtt_); // Calculate BodyRate
+  
+  if (node_state == TRACKING || node_state == DOCKING)
+  {
+    // update external force estimation
+    if (estimator_enable)
+    {
+      double time_now = ros::Time::now().toSec();
+      force_ext_estimator.setControlForce(force_3d);
       force_ext_estimator.update_force(mavVel_, time_now);
     }
     force_ext = force_ext_estimator.getForceEstimate();
@@ -677,10 +712,35 @@ void geometricCtrl::computeThrustCmd_asmc()
 
 void geometricCtrl::checkDockingPos()
 {
-  if ((mavPos_.head(2) - dockingPos_.head(2)).cwiseAbs().maxCoeff() < 0.02)
+  // docking ready position: {x: -0.12, y: -0.55, z: 0.8}
+  // docking actual position: {z: 0.97}
+  // docking attempt position: {z: 1.03}
+
+  // pre-align & ascenting
+  if ((mavPos_.head(2) - dockingPos_.head(2)).cwiseAbs().maxCoeff() < 0.01 
+      && targetPos_(2) < docking_final_altitude)
   {
-    if (targetPos_(2) < docking_final_altitude)
-      targetPos_(2) = targetPos_(2) + 0.001;  
+    targetPos_(2) = targetPos_(2) + 0.001;
+    use_impedance_control = false;
+  }
+  // failed & re-align
+  if ((mavPos_.head(2) - dockingPos_.head(2)).cwiseAbs().maxCoeff() > 0.015 
+      && targetPos_(2) >= docking_actual_altitude)
+  {
+    targetPos_(2) = docking_actual_altitude - 0.05;
+    use_impedance_control = false;
+  }
+  // failed & re-align 2
+  if (force_ext(2) < force_desired_vec(2) - 1)
+  {
+    targetPos_(2) = docking_actual_altitude - 0.05;
+    use_impedance_control = false;
+  }
+  // enforce state 
+  if ((mavPos_.head(2) - dockingPos_.head(2)).cwiseAbs().maxCoeff() < 0.01 
+      && abs(mavPos_(2) - docking_actual_altitude) < 0.01 )
+  {
+    use_impedance_control = true;
   }
 }
 

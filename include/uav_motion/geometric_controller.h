@@ -24,6 +24,7 @@
 #include <nav_msgs/Odometry.h>
 #include <nav_msgs/Path.h>
 #include <sensor_msgs/Imu.h>
+#include <sensor_msgs/BatteryState.h>
 #include <mavros_msgs/SetMode.h>
 #include <mavros_msgs/State.h>
 #include <mavros_msgs/CommandBool.h>
@@ -42,6 +43,7 @@
 #include <geometric_controller/GeometricControllerConfig.h>
 
 #include "uav_motion/disturbance_estimator.hpp"
+#include "uav_motion/sliding_window_filter.hpp"
 
 #define ERROR_QUATERNION 1
 #define ERROR_GEOMETRIC 2
@@ -78,6 +80,7 @@ private:
   ros::Subscriber mavtwistSub_;
   ros::Subscriber yawreferenceSub_;
   ros::Subscriber mavThrustSub_;
+  ros::Subscriber mavBatterySub_;
 
   ros::Subscriber waypointsStatusSub_;  
   
@@ -145,12 +148,18 @@ private:
   Eigen::Vector3d acc_des_asmc, acc_fb_asmc;
   Eigen::Vector3d term1, term2;
   double thrust_adaptive;
+  double batteryVoltage;
+
+  // for impedance controller
+  Eigen::Vector3d force_feedback, force_3d;
+  Eigen::Vector3d Kp;
 
   // for external force estimator
   int estimator_enable;
   DisturbEstimator force_ext_estimator;
+  SlidingWindowFilter force_ext_filter;
   Eigen::Vector3d K_f;
-  Eigen::Vector3d force_ext;
+  Eigen::Vector3d force_ext, force_ext_filtered;
 
   // for releasing process
   int mission_, test_mode;
@@ -163,7 +172,11 @@ private:
   // for docking
   bool ready_to_dock_;
   Eigen::Vector3d dockingPos_;
-  double docking_final_altitude;
+  double docking_final_altitude, docking_actual_altitude;
+  bool use_impedance_control;
+  double force_desired;
+  Eigen::Vector3d force_desired_vec;
+  int enforce_count;
 
   // some constrains
   double max_rate_yaw;
@@ -200,6 +213,7 @@ private:
   void mavposeCallback(const geometry_msgs::PoseStamped &msg);
   void mavtwistCallback(const geometry_msgs::TwistStamped &msg);
   void mavThrustCallback(const mavros_msgs::ThrustSPFromPX4 &msg);
+  void mavBatteryCallback(const sensor_msgs::BatteryState &msg);
 
   bool releaseCallback(uav_motion::release::Request &req, uav_motion::release::Response &res);
   void waypointsStatusCallback(const std_msgs::Bool &msg);
@@ -213,6 +227,7 @@ private:
   
   void computeBodyRateCmd(Eigen::Vector4d &bodyrate_cmd);
   void computeThrustCmd_asmc();
+  void computeThrustCmd_normal();
   Eigen::Vector4d quatMultiplication(const Eigen::Vector4d &q, const Eigen::Vector4d &p);
   Eigen::Vector4d attcontroller(const Eigen::Vector4d &ref_att, const Eigen::Vector3d &ref_acc, Eigen::Vector4d &curr_att);
   Eigen::Vector4d geometric_attcontroller(const Eigen::Vector4d &ref_att, const Eigen::Vector3d &ref_acc, Eigen::Vector4d &curr_att);

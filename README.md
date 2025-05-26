@@ -6,6 +6,12 @@
 
 ## Update Record
 
+### 2025-05-26
+
+- Procedure
+  - Add complete docking procedure. Could achieve basic functions.
+  - Add sliding window filter for external force estimation.
+
 ### 2025-05-20
 
 - Procedure
