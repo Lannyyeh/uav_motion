@@ -36,9 +36,9 @@ release:
  max_rate_yaw: 1.0
 
 docking:
-  position: {x: -0.12, y: -0.54, z: 0.8}
-  docking_final_altitude: 1.03
-  docking_actual_altitude: 0.97
+  position: {x: -0.01, y: -0.55, z: 0.8}
+  docking_final_altitude: 1.14
+  docking_actual_altitude: 1.095
   force_desired: -2.6
 
 morph:

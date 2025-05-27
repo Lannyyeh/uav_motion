@@ -6,6 +6,16 @@
 
 ## Update Record
 
+### 2025-05-27
+
+- Procedure
+  - Add a sub-state machine for DOCKING.
+    - Improve the align -> docking -> retry procedure.
+    - Add impedance controller for docking.
+    - Introduce some time counts.
+  - Remove the unused state of 'LANDING' in main-state machine.
+    - Add 'FINISHED' for ending.
+
 ### 2025-05-26
 
 - Procedure

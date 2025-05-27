@@ -17,6 +17,7 @@ geometricCtrl::geometricCtrl(const ros::NodeHandle &nh, const ros::NodeHandle &n
                                                                                              landing_commanded_(false),
                                                                                              feedthrough_enable_(false),
                                                                                              node_state(WAITING_FOR_HOME_POSE),
+                                                                                             docking_state(INIT_ALIGN),
                                                                                              init_x_(0.0),
                                                                                              init_y_(0.0),
                                                                                              init_z_(1.0)
@@ -56,7 +57,7 @@ geometricCtrl::geometricCtrl(const ros::NodeHandle &nh, const ros::NodeHandle &n
 
   arming_client_ = nh_.serviceClient<mavros_msgs::CommandBool>("/mavros/cmd/arming");
   set_mode_client_ = nh_.serviceClient<mavros_msgs::SetMode>("/mavros/set_mode");
-  land_service_ = nh_.advertiseService("land", &geometricCtrl::landCallback, this);
+  // land_service_ = nh_.advertiseService("land", &geometricCtrl::landCallback, this);
 
   release_service_ = nh_.advertiseService("release", &geometricCtrl::releaseCallback, this);
   // path_client_ = nh_.serviceClient<uav_motion::generatePath>("generate_path");
@@ -308,10 +309,10 @@ void geometricCtrl::waypointsStatusCallback(const std_msgs::Bool &msg)
     ROS_INFO("waypoints publishing finished");
 }
 
-bool geometricCtrl::landCallback(std_srvs::SetBool::Request &request, std_srvs::SetBool::Response &response)
-{
-  node_state = LANDING;
-}
+// bool geometricCtrl::landCallback(std_srvs::SetBool::Request &request, std_srvs::SetBool::Response &response)
+// {
+//   node_state = LANDING;
+// }
 
 bool geometricCtrl::releaseCallback(uav_motion::release::Request &req, uav_motion::release::Response &res)
 {
@@ -386,22 +387,25 @@ void geometricCtrl::cmdloopCallback(const ros::TimerEvent &event)
       checkDockingPos();
       break;
       // how to end docking ?
-    case LANDING:
-    {
-      geometry_msgs::PoseStamped landingmsg;
-      landingmsg.header.stamp = ros::Time::now();
-      landingmsg.pose = home_pose_;
-      landingmsg.pose.position.z = landingmsg.pose.position.z + 1.0;
-      target_pose_pub_.publish(landingmsg);
-      node_state = LANDED;
-      ros::spinOnce();
+    case FINISHED:
+      pubRateCommands(cmdIdleRate_);
       break;
-    }
+    // case LANDING:
+    // {
+    //   geometry_msgs::PoseStamped landingmsg;
+    //   landingmsg.header.stamp = ros::Time::now();
+    //   landingmsg.pose = home_pose_;
+    //   landingmsg.pose.position.z = landingmsg.pose.position.z + 1.0;
+    //   target_pose_pub_.publish(landingmsg);
+    //   node_state = LANDED;
+    //   ros::spinOnce();
+    //   break;
+    // }
 
-    case LANDED:
-      ROS_INFO("Landed. Please set to position control and disarm.");
-      cmdloop_timer_.stop();
-      break;
+    // case LANDED:
+    //   ROS_INFO("Landed. Please set to position control and disarm.");
+    //   cmdloop_timer_.stop();
+    //   break;
   }
   pubFlightState();
   if (control_available_)
@@ -420,7 +424,7 @@ void geometricCtrl::cmdloopCallback(const ros::TimerEvent &event)
     outFile << "cmdActual" << "," << cmdActual_(0) << "," << cmdActual_(1) << "," << cmdActual_(2) << "," << cmdActual_(3) << "," << "\n";
     outFile << "force_3d" << "," << force_3d(0) << "," << force_3d(1) << "," << force_3d(2) << "," << "\n";
     outFile << "force_feedback" << "," << force_feedback(0) << "," << force_feedback(1) << "," << force_feedback(2) << "," << "\n";
-    outFile << "else" << "," << int(use_impedance_control) << "," << batteryVoltage << "," << control_step << "," << "\n";
+    outFile << "else" << "," << int(use_impedance_control) << "," << int(docking_state) << "," << control_step << "," << "\n";
     outFile << "force_ext" << "," << force_ext(0) << "," << force_ext(1) << "," << force_ext(2) << "," << "\n";
     outFile << "force_ext_filtered" << "," << force_ext_filtered(0) << "," << force_ext_filtered(1) << "," << force_ext_filtered(2) << "," << "\n";
 
@@ -716,31 +720,103 @@ void geometricCtrl::checkDockingPos()
   // docking actual position: {z: 0.97}
   // docking attempt position: {z: 1.03}
 
-  // pre-align & ascenting
-  if ((mavPos_.head(2) - dockingPos_.head(2)).cwiseAbs().maxCoeff() < 0.01 
-      && targetPos_(2) < docking_final_altitude)
-  {
-    targetPos_(2) = targetPos_(2) + 0.001;
-    use_impedance_control = false;
-  }
-  // failed & re-align
-  if ((mavPos_.head(2) - dockingPos_.head(2)).cwiseAbs().maxCoeff() > 0.015 
-      && targetPos_(2) >= docking_actual_altitude)
-  {
-    targetPos_(2) = docking_actual_altitude - 0.05;
-    use_impedance_control = false;
-  }
-  // failed & re-align 2
-  if (force_ext(2) < force_desired_vec(2) - 1)
-  {
-    targetPos_(2) = docking_actual_altitude - 0.05;
-    use_impedance_control = false;
-  }
-  // enforce state 
-  if ((mavPos_.head(2) - dockingPos_.head(2)).cwiseAbs().maxCoeff() < 0.01 
-      && abs(mavPos_(2) - docking_actual_altitude) < 0.01 )
-  {
-    use_impedance_control = true;
+  // // pre-align & ascenting
+  // if ((mavPos_.head(2) - dockingPos_.head(2)).cwiseAbs().maxCoeff() < 0.01 
+  //     && targetPos_(2) < docking_final_altitude)
+  // {
+  //   targetPos_(2) = targetPos_(2) + 0.001;
+  //   use_impedance_control = false;
+  // }
+  // // failed & re-align
+  // if ((mavPos_.head(2) - dockingPos_.head(2)).cwiseAbs().maxCoeff() > 0.015 
+  //     && targetPos_(2) >= docking_actual_altitude)
+  // {
+  //   targetPos_(2) = docking_actual_altitude - 0.05;
+  //   use_impedance_control = false;
+  // }
+  // // failed & re-align 2
+  // if (force_ext(2) < force_desired_vec(2) - 1)
+  // {
+  //   targetPos_(2) = docking_actual_altitude - 0.05;
+  //   use_impedance_control = false;
+  // }
+  // // enforce state 
+  // if ((mavPos_.head(2) - dockingPos_.head(2)).cwiseAbs().maxCoeff() < 0.01 
+  //     && abs(mavPos_(2) - docking_actual_altitude) < 0.01 )
+  // {
+  //   use_impedance_control = true;
+  // }
+  switch (docking_state) {
+    case INIT_ALIGN:
+      if ((mavPos_.head(2) - dockingPos_.head(2)).cwiseAbs().maxCoeff() < 0.01 
+          && targetPos_(2) < docking_final_altitude) 
+      {
+        docking_state = ASCEND_TRACK;
+        use_impedance_control = false;
+      }
+      break;
+
+    case ASCEND_TRACK:
+      if ((mavPos_.head(2) - dockingPos_.head(2)).cwiseAbs().maxCoeff() < 0.01 
+          && targetPos_(2) < docking_final_altitude) 
+      {
+        if (abs(mavPos_(2) - docking_actual_altitude) < 0.01)
+        {
+          docking_state = IMPEDANCE_CTRL;
+          docking_count = 0;
+        }
+        else
+        {
+          targetPos_(2) = targetPos_(2) + 0.001;
+          use_impedance_control = false;
+        }
+      }
+      // we use 'less than' since force_ext and force_desired are both negative
+      if (force_ext(2) < force_desired_vec(2) - 0.5)
+      {
+        targetPos_(2) = docking_actual_altitude - 0.05;
+        use_impedance_control = false;
+      }
+      if ((mavPos_.head(2) - dockingPos_.head(2)).cwiseAbs().maxCoeff() > 0.015 
+          && targetPos_(2) >= docking_actual_altitude)
+      {
+        targetPos_(2) = docking_actual_altitude - 0.05;
+        use_impedance_control = false;
+      }
+      break;
+
+    case IMPEDANCE_CTRL:
+      docking_count++;
+      use_impedance_control = true;
+      if (docking_count > 400) 
+      {
+        targetPos_(2) = docking_actual_altitude - 0.05; // 下降到实际对接位置下方5cm
+        retry_count = 0;
+        docking_state = RETRY_ALIGN;
+      }
+      break;
+
+    case RETRY_ALIGN:
+      use_impedance_control = false;
+      if (mavPos_(2) < docking_actual_altitude - 0.02) 
+      {
+        retry_count = 0;
+        docking_state = INIT_ALIGN; // 重新开始对接流程
+      } 
+      else 
+      {
+        retry_count++;
+        if (retry_count > 200) 
+        {
+          docking_state = IDLE;
+        }// 对接成功，切换到空闲
+      }
+      break;
+
+    case IDLE:
+      node_state = FINISHED;
+      // 成功插入后的静止状态，可以切换主状态或等待指令
+    break;
   }
 }
 

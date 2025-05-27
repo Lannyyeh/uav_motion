@@ -95,7 +95,7 @@ private:
   ros::ServiceClient arming_client_;
   ros::ServiceClient set_mode_client_;
   ros::ServiceServer ctrltriggerServ_;
-  ros::ServiceServer land_service_;
+  // ros::ServiceServer land_service_;
   ros::ServiceServer release_service_;
   ros::Timer cmdloop_timer_, statusloop_timer_;
   ros::Time last_request_, reference_request_now_, reference_request_last_;
@@ -176,7 +176,7 @@ private:
   bool use_impedance_control;
   double force_desired;
   Eigen::Vector3d force_desired_vec;
-  int enforce_count;
+  int docking_count, retry_count;
 
   // some constrains
   double max_rate_yaw;
@@ -221,7 +221,7 @@ private:
 
   void statusloopCallback(const ros::TimerEvent &event);
   bool ctrltriggerCallback(std_srvs::SetBool::Request &req, std_srvs::SetBool::Response &res);
-  bool landCallback(std_srvs::SetBool::Request &request, std_srvs::SetBool::Response &response);
+  // bool landCallback(std_srvs::SetBool::Request &request, std_srvs::SetBool::Response &response);
   Eigen::Matrix3d quat2RotMatrix(const Eigen::Vector4d q);
   geometry_msgs::PoseStamped vector3d2PoseStampedMsg(Eigen::Vector3d &position, Eigen::Vector4d &orientation);
   
@@ -254,9 +254,16 @@ private:
     // INTERMEDIATE_STATE,
     TRACKING,
     DOCKING,
-    LANDING,
-    LANDED
+    FINISHED
   } node_state;
+
+  enum DockingSubState {
+    INIT_ALIGN,
+    ASCEND_TRACK,
+    IMPEDANCE_CTRL,
+    RETRY_ALIGN,
+    IDLE
+  } docking_state; 
 
   template <class T>
   void waitForPredicate(const T *pred, const std::string &msg, double hz = 2.0)
